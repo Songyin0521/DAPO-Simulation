@@ -30,7 +30,7 @@ def main():
 
     train = load_jsonl("data/gsm8k_train.jsonl")
 
-    quant_config = setup_bnb_4bit(bfloat16=cfg.get("bf16", True))
+    quant_config = setup_bnb_4bit(bfloat16=cfg.get("bf16", True)) if cfg.get("bnb_4bit", True) else None
     tok = AutoTokenizer.from_pretrained(cfg["model_name"], use_fast=True)
     tok.pad_token = tok.eos_token
     model = AutoModelForCausalLM.from_pretrained(
@@ -39,7 +39,8 @@ def main():
         quantization_config=quant_config,
         trust_remote_code=True
     )
-    model = prepare_model_for_kbit_training(model)
+    if quant_config:
+        model = prepare_model_for_kbit_training(model)
     lora_cfg = LoraConfig(
         r=cfg["lora_r"], lora_alpha=cfg["lora_alpha"], lora_dropout=cfg["lora_dropout"],
         target_modules=["q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down_proj"],
@@ -52,10 +53,13 @@ def main():
     scaler_var = EMAVar(cfg["dsd_tau"])
 
     model.train()
-    global_step = 0
+    grad_accum = max(1, int(cfg.get("gradient_accumulation_steps", 1)))
+    update_step = 0
+    micro_step = 0
     gsize = cfg["group_size"]
+    done = False
 
-    while global_step < cfg["max_steps"]:
+    while not done:
         for idx in batchify_indices(len(train), cfg["per_device_train_batch_size"]):
             prompts = [train.rows[i]["prompt"] for i in idx]
             golds   = [train.rows[i]["answer"] for i in idx]
@@ -91,24 +95,32 @@ def main():
                 all_loss = all_loss + loss_group
 
             all_loss = all_loss / max(1, len(prompts))
-            all_loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            opt.step(); scheduler.step(); opt.zero_grad()
+            # scale loss for gradient accumulation
+            (all_loss / grad_accum).backward()
+            micro_step += 1
 
-            if global_step % cfg["log_every"] == 0:
-                total_rewards = sum(sum(r) for r in batch_rewards)
-                total_counts = sum(len(r) for r in batch_rewards)
-                avg_reward = float(total_rewards / max(1, total_counts))
-                print(f"step {global_step} | loss {all_loss.item():.4f} | reward {avg_reward:.3f} | scale={scale:.3f}")
-                wandb.log({"step": global_step, "loss": all_loss.item(), "avg_reward": avg_reward, "scale": scale})
+            if micro_step % grad_accum == 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                opt.step(); scheduler.step(); opt.zero_grad()
+                update_step += 1
 
-            if (global_step+1) % cfg["save_every"] == 0:
-                ck = outdir / "last"
-                ck.mkdir(parents=True, exist_ok=True)
-                model.save_pretrained(ck); tok.save_pretrained(ck)
+                if update_step % cfg["log_every"] == 0:
+                    total_rewards = sum(sum(r) for r in batch_rewards)
+                    total_counts = sum(len(r) for r in batch_rewards)
+                    avg_reward = float(total_rewards / max(1, total_counts))
+                    print(f"step {update_step} | loss {all_loss.item():.4f} | reward {avg_reward:.3f} | scale={scale:.3f}")
+                    wandb.log({"step": update_step, "loss": all_loss.item(), "avg_reward": avg_reward, "scale": scale})
 
-            global_step += 1
-            if global_step >= cfg["max_steps"]:
+                if update_step % cfg["save_every"] == 0:
+                    ck = outdir / "last"
+                    ck.mkdir(parents=True, exist_ok=True)
+                    model.save_pretrained(ck); tok.save_pretrained(ck)
+
+                if update_step >= cfg["max_steps"]:
+                    done = True
+                    break
+
+            if done:
                 break
 
     print("Training done. Checkpoints at outputs/last")
