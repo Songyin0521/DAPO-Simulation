@@ -66,7 +66,9 @@ def main():
             for texts, hitmax, gold in zip(texts_group, hitmax_group, golds):
                 rewards = reward_math(texts, [gold]*len(texts), hitmax,
                                       overlong_penalty=cfg["overlong_penalty"],
-                                      length_penalty_alpha=cfg["length_penalty_alpha"])
+                                      length_penalty_alpha=cfg["length_penalty_alpha"],
+                                      max_new_tokens=cfg["max_new_tokens"],
+                                      tokenizer=tok)
                 batch_rewards.append(rewards)
 
             all_loss = 0.0
