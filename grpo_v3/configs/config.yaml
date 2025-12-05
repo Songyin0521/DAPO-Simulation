@@ -5,7 +5,7 @@ seed: 42
 
 # Data / lengths
 max_prompt_len: 1024
-max_new_tokens: 1024
+max_new_tokens: 512
 
 # GRPO
 group_size: 4
@@ -37,7 +37,7 @@ weight_decay: 0.0
 bf16: true
 gradient_accumulation_steps: 4
 per_device_train_batch_size: 1
-max_steps: 1500
+max_steps: 1200
 eval_every: 200
 save_every: 200
 log_every: 10
