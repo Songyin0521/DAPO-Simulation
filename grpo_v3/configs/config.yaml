@@ -4,7 +4,7 @@ output_dir: "outputs"
 seed: 42
 
 # Data / lengths
-max_prompt_len: 1024
+max_prompt_len: 2048  # effectively no truncation; watch memory
 max_new_tokens: 512
 
 # GRPO
@@ -35,9 +35,9 @@ lr: 1.5e-5
 warmup_steps: 50
 weight_decay: 0.0
 bf16: true
-gradient_accumulation_steps: 2
-per_device_train_batch_size: 2
-max_steps: 1000
+gradient_accumulation_steps: 4
+per_device_train_batch_size: 1
+max_steps: 1500
 eval_every: 200
 save_every: 200
 log_every: 10
